@@ -5,14 +5,13 @@
 
 A tiny Windows overlay that shows **where sounds come from** in a game: a left/right volume bar, a marker that remembers the direction of the last shot, and indicators on the screen edges that flash when a loud sound is detected on that side.
 
-It was built as an **accessibility aid for players who are deaf in one ear or hard of hearing** and cannot localize sounds (gunshots, footsteps, explosions...) in shooters and other games.
+It was built as an **accessibility aid for players who are deaf in one ear, hard of hearing or simply deaf** in shooters and other games or functionalities.
 
 <!-- Add a screenshot here, e.g. docs/screenshot.png -->
 <!-- ![Screenshot](docs/screenshot.png) -->
 
 - Single small `.exe`, **no installation, no dependencies**
 - Works with any game: it reads the Windows audio output, not the game
-- Written in plain C++ (Win32, WASAPI, GDI+)
 
 ## Features
 
@@ -24,8 +23,6 @@ It was built as an **accessibility aid for players who are deaf in one ear or ha
 | **Settings panel** | Click the gear icon in the bar container: sliders for every threshold, a live level meter, and placement tools. |
 | **Move mode** | Drag every element anywhere on screen to fit your game's HUD. Positions are saved. |
 
-Everything is drawn in click-through, always-on-top, per-pixel-transparent windows, so it never blocks your mouse or steals focus from the game.
-
 ## Quick start
 
 1. Download  [AudioSight.exe](https://github.com/Lespleiades/AudioSight/releases/tag/executable) or [build it yourself](#building).
@@ -33,8 +30,6 @@ Everything is drawn in click-through, always-on-top, per-pixel-transparent windo
 3. Set your game to **Borderless Windowed** (see [Limitations](#limitations)).
 4. Press **F8** to place the elements where you want them, press **F8** again to confirm.
 5. Press **F7** (or click the gear) to open the settings and tune the sensitivity.
-
-A notification area icon lets you open the settings or **Quit**.
 
 ## Hotkeys
 
@@ -46,8 +41,6 @@ Global hotkeys, they work while the game has focus.
 | **F8** | Move mode on / off (drag elements with the mouse, press again to save) |
 | **F9** / **F10** | Volume bars more / less sensitive |
 | **F11** / **F12** | Shot detection more / less sensitive |
-
-> The gear icon is only clickable while the mouse cursor is **visible** (game menu, pause, or a key that frees the cursor). While the game hides the cursor, the whole overlay stays click-through. The hotkeys always work.
 
 ## Tuning the detection
 
@@ -83,9 +76,9 @@ The program does **not** read or modify game memory, does not inject anything an
 - Windows 10 / 11, 64-bit.
 - Direction accuracy depends on how the game mixes its audio (stereo headphone output works best).
 
-### Fair play
+### Cautions
 
-This tool only presents audio information visually and never reveals enemy positions. Still, rules differ between games, servers and tournaments: check that overlays and accessibility tools are allowed where you play.
+This tool **only presents audio information from you PC visually**. Still, rules differ between games, servers and tournaments: **check that overlays and accessibility tools are allowed where you play**.
 
 ## Windows Release
 
