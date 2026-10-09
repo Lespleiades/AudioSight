@@ -1,4 +1,7 @@
+
 # AudioSight: Directional Audio Overlay
+
+<img width="1920" height="1080" alt="AudioSight" src="https://github.com/user-attachments/assets/3e06dc0f-0486-412a-8921-c57a9260ef01" />
 
 A tiny Windows overlay that shows **where sounds come from** in a game: a left/right volume bar, a marker that remembers the direction of the last shot, and indicators on the screen edges that flash when a loud sound is detected on that side.
 
