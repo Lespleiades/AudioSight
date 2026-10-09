@@ -10,7 +10,7 @@ It was built as an **accessibility aid for players who are deaf in one ear or ha
 <!-- Add a screenshot here, e.g. docs/screenshot.png -->
 <!-- ![Screenshot](docs/screenshot.png) -->
 
-- Single small `.exe` (about 250 KB), **no installation, no dependencies**
+- Single small `.exe`, **no installation, no dependencies**
 - Works with any game: it reads the Windows audio output, not the game
 - Written in plain C++ (Win32, WASAPI, GDI+)
 
@@ -20,7 +20,7 @@ It was built as an **accessibility aid for players who are deaf in one ear or ha
 |---|---|
 | **Volume bar** | LED-style bars showing the left and right output level in real time. |
 | **Direction marker** | A marker under the bar that jumps to the direction of the **last detected shot** and stays there, so you can glance at it a second later. |
-| **Edge indicators** | Orange indicators on the left, right and top edges of the screen. Invisible by default; the one matching the direction of a shot lights up and fades out after about a second. A centered sound lights the top one. |
+| **Edge indicators** | Green indicators on the left, right and top edges of the screen. Invisible by default; the one matching the direction of a shot lights up and fades out after about a second. A centered sound lights the top one. |
 | **Settings panel** | Click the gear icon in the bar container: sliders for every threshold, a live level meter, and placement tools. |
 | **Move mode** | Drag every element anywhere on screen to fit your game's HUD. Positions are saved. |
 
@@ -28,7 +28,7 @@ Everything is drawn in click-through, always-on-top, per-pixel-transparent windo
 
 ## Quick start
 
-1. Download `AudioSight.exe` (or [build it yourself](#building)).
+1. Download  [AudioSight.exe](https://github.com/Lespleiades/AudioSight/releases/tag/executable) or [build it yourself](#building).
 2. Put it in its own folder (it creates `AudioSight.ini` next to itself) and run it.
 3. Set your game to **Borderless Windowed** (see [Limitations](#limitations)).
 4. Press **F8** to place the elements where you want them, press **F8** again to confirm.
@@ -53,11 +53,9 @@ Global hotkeys, they work while the game has focus.
 
 Open the settings panel and play for a moment. The **live meter** shows the current sound level with three marks:
 
-- blue tick: the volume bars threshold
-- orange tick: the shot detection threshold
-- white tick: the level of the last detected shot
+- purple tick: the volume bars threshold
+- green tick: the shot detection threshold and the level of the last detected shot
 
-Put the orange tick just below the white one, so shots are detected but footsteps (which stay under the orange tick) are not.
 
 | Setting | Meaning |
 |---|---|
@@ -75,7 +73,6 @@ Settings and positions are stored in `AudioSight.ini` next to the executable. Ad
 2. **Analysis**: every ~21 ms block, the energy of the left-side and right-side channels is computed in dB. Multichannel formats (5.1 / 7.1) are mapped using the device's channel mask; the center channel counts for both sides, the LFE is ignored.
 3. **Shot detection**: a sound is a "shot" if it is above the shot threshold **and** rises abruptly above a slowly-tracked background level.
 4. **Direction**: the left/right level difference of the detected sound decides left, right or center.
-5. **Display**: GDI+ renders into a 32-bit premultiplied bitmap shown with `UpdateLayeredWindow`. Opacity changes (fades) never trigger a redraw.
 
 The program does **not** read or modify game memory, does not inject anything and does not hook the game. It only listens to the system audio output and draws its own windows.
 
@@ -89,6 +86,10 @@ The program does **not** read or modify game memory, does not inject anything an
 ### Fair play
 
 This tool only presents audio information visually and never reveals enemy positions. Still, rules differ between games, servers and tournaments: check that overlays and accessibility tools are allowed where you play.
+
+## Windows Release
+
+[AudioSight.exe](https://github.com/Lespleiades/AudioSight/releases/tag/executable)
 
 ## Building
 
