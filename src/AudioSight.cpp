@@ -1,23 +1,5 @@
 // =====================================================================
-//  Directional Audio Overlay
-//
-//  A small Windows overlay that shows, on screen, from which side the
-//  sounds of a game are coming (left / right / center). Made as an
-//  accessibility aid for players who are deaf in one ear or hard of
-//  hearing and cannot localize sounds such as gunshots or footsteps.
-//
-//  - Captures the system audio output with WASAPI loopback
-//  - Draws everything with GDI+ in click-through "layered" windows
-//    (per-pixel transparency, always on top)
-//  - No dependencies: a single small .exe
-//
-//  What is displayed:
-//    * a volume bar for the left and right channels
-//    * a marker that stays on the direction of the last detected shot
-//    * three indicators (left / right / top) on the screen edges that
-//      flash briefly when a loud, sudden sound (shot) is detected
-//    * a gear icon (inside the bar container) that opens the settings
-//      panel with sliders and a live level meter
+//  AudioSight: Directional Audio Overlay
 //
 //  Hotkeys (global, they work while the game has focus):
 //    F7  : open / close the settings panel
@@ -25,10 +7,6 @@
 //    F9  : volume bars more sensitive      F10 : less sensitive
 //    F11 : shot detection more sensitive   F12 : less sensitive
 //  Notification area icon: click for a menu (including "Quit").
-//
-//  Colors: every color can be changed in the [colors] section of
-//  AudioSight.ini (applied live when the file is saved), or in the
-//  COLOR_LIST table below.
 //
 //  Build (MinGW-w64):
 //    g++ -O2 -s -mwindows -static -static-libgcc -static-libstdc++
@@ -85,7 +63,10 @@ static const float  kDefaultSuddenness   = 12.0f;   // dB a sound must rise abov
 static const float  kDefaultCenterZone   = 3.0f;    // L/R difference (dB) below which a shot is "center"
 static const float  kDefaultDuration     = 1.0f;    // indicator display time (s)
 static const double kShotCooldown        = 0.15;    // min seconds between two detections
-static const float  kBalanceFullDb       = 12.0f;   // L/R difference that puts the marker at the end
+static const float  kFlashGlow           = 34.0f;   // size of the shot flash glow around the bar (logical px)
+static const double kShotPeakWindow      = 0.08;    // s after a detection used to measure the shot's peak
+static const float  kFlashFullDb         = -15.0f;  // shot level (dB) that gives a full-intensity flash
+static const float  kDefaultFlashMin     = 0.20f;   // flash intensity of the quietest detectable shot (0..1)
 static const int    kSegments            = 20;      // segments per side in the volume bar
 static const float  kRestOpacity         = 0.30f;   // bar opacity when nothing happens
 
@@ -109,6 +90,8 @@ static std::atomic<float> gBarsDb(kDefaultBarsDb), gShotDb(kDefaultShotDb),
                           gSuddenness(kDefaultSuddenness), gCenterZone(kDefaultCenterZone);
 static float gDuration = kDefaultDuration;
 static bool gDebug = false;
+static bool gFlashOn = true;                 // shot flash enabled (default: on)
+static float gFlashMin = kDefaultFlashMin;   // flash intensity of the quietest shot
 static std::wstring gIniPath;
 
 static float IniFloat(const wchar_t* sec, const wchar_t* key, float def) {
@@ -132,7 +115,14 @@ static void IniWriteInt(const wchar_t* sec, const wchar_t* key, int v) {
     _snwprintf(buf, 64, L"%d", v);
     WritePrivateProfileStringW(sec, key, buf, gIniPath.c_str());
 }
+static void IniWriteFloat2(const wchar_t* sec, const wchar_t* key, float v) {
+    wchar_t buf[64];
+    _snwprintf(buf, 64, L"%.2f", v);
+    WritePrivateProfileStringW(sec, key, buf, gIniPath.c_str());
+}
 static void SaveSettings() {
+    IniWriteInt(L"settings", L"flash_enabled", gFlashOn ? 1 : 0);
+    IniWriteFloat2(L"settings", L"flash_min_intensity", gFlashMin);
     IniWriteFloat(L"settings", L"bars_threshold_db", gBarsDb);
     IniWriteFloat(L"settings", L"shots_threshold_db", gShotDb);
     IniWriteFloat(L"settings", L"suddenness_db", gSuddenness);
@@ -167,6 +157,10 @@ static void SaveSettings() {
     X(indicator,          L"indicator_fill",        0xEB28E119, "Screen-edge shot indicators (left / right / top)") \
     X(indicatorBorder,    L"indicator_border",      0x78FFFFFF, "Outline of the screen-edge indicators") \
     X(indicatorLabel,     L"indicator_move_label",  0xFFFFFFFF, "Label (L / R / TOP) shown on the indicators in move mode") \
+    X(shotFlash,          L"shot_flash",            0xB428E119, "Glow flashed around the bar container when a shot is detected (AA = intensity, 00 disables it)") \
+    X(toggleOn,           L"toggle_on",             0xFF34C759, "Switch color when ON (shot flash switch)") \
+    X(toggleOff,          L"toggle_off",            0xFF4A4E64, "Switch color when OFF") \
+    X(toggleThumb,        L"toggle_thumb",          0xFFFFFFFF, "Switch handle") \
     X(panelBackground,    L"panel_background",      0xF00E1018, "Settings panel background") \
     X(panelBorder,        L"panel_border",          0x3CFFFFFF, "Settings panel outline") \
     X(panelTitle,         L"panel_title",           0xFFFFFFFF, "Settings panel title") \
@@ -242,11 +236,26 @@ static void FormatColor(uint32_t v, uint32_t def, wchar_t* out, size_t n) {
     else _snwprintf(out, n, L"#%08X", (unsigned)v);
 }
 
-// Creates the documented [colors] section in the .ini file if it is missing.
+// Makes sure the documented [colors] section exists in the .ini file, and adds
+// the keys that are missing (for example colors introduced by a newer version).
 static void EnsureColorSection() {
-    wchar_t buf[64] = L"";
-    GetPrivateProfileStringW(L"colors", kColorEntries[0].key, L"", buf, 64, gIniPath.c_str());
-    if (buf[0]) return;
+    bool missing[256] = {};
+    int nMissing = 0;
+    for (int i = 0; i < kColorCount && i < 256; i++) {
+        wchar_t buf[64] = L"";
+        GetPrivateProfileStringW(L"colors", kColorEntries[i].key, L"", buf, 64, gIniPath.c_str());
+        if (!buf[0]) { missing[i] = true; nMissing++; }
+    }
+    if (nMissing == 0) return;
+    if (nMissing < kColorCount) {   // the section exists: only add the missing keys
+        for (int i = 0; i < kColorCount && i < 256; i++) {
+            if (!missing[i]) continue;
+            wchar_t v[16];
+            FormatColor(kColorEntries[i].def, kColorEntries[i].def, v, 16);
+            WritePrivateProfileStringW(L"colors", kColorEntries[i].key, v, gIniPath.c_str());
+        }
+        return;
+    }
     FILE* f = _wfopen(gIniPath.c_str(), L"ab");
     if (!f) return;
     fputs("\r\n[colors]\r\n"
@@ -290,7 +299,7 @@ struct AudioState {
     std::atomic<float>  dbL{-100.f}, dbR{-100.f};   // level of the last analysis block
     std::atomic<double> lastDataTime{0.0};          // when audio data last arrived
     std::atomic<double> shotTime[3];                // 0 = left, 1 = right, 2 = top (center)
-    std::atomic<float>  lastDiff{0.f};              // R - L (dB) of the last shot
+    std::atomic<int>    shotRev{0};                 // incremented whenever shotL / shotR change
     std::atomic<float>  shotL{-100.f}, shotR{-100.f};
     std::atomic<int>    shotCount{0};
 };
@@ -302,6 +311,8 @@ static std::atomic<bool> gRun(true);
 struct Detector {
     double background = -80.0;
     double lastShot = 0.0;
+    double peakEnd = 0.0;    // end of the peak measurement window of the last shot
+    float  peakLevel = -100.f;
 };
 
 static void FinishBlock(Detector& d, double sumL, double sumR, int n) {
@@ -318,11 +329,19 @@ static void FinishBlock(Detector& d, double sumL, double sumR, int n) {
         float diff = r - l;
         int side = diff < -centerZone ? 0 : (diff > centerZone ? 1 : 2);
         gAudio.shotTime[side] = t;
-        gAudio.lastDiff = diff;
         gAudio.shotL = l;
         gAudio.shotR = r;
         gAudio.shotCount++;
+        gAudio.shotRev++;
         d.lastShot = t;
+        d.peakLevel = level;
+        d.peakEnd = t + kShotPeakWindow;
+    } else if (t < d.peakEnd && level > d.peakLevel) {
+        // still in the attack of the shot: keep the loudest block for the direction
+        d.peakLevel = level;
+        gAudio.shotL = l;
+        gAudio.shotR = r;
+        gAudio.shotRev++;
     }
     // the background rises slowly and falls quickly
     double coef = level > d.background ? 0.03 : 0.10;
@@ -507,7 +526,7 @@ static void Text(Graphics* g, const wchar_t* s, float px, bool bold, Color c,
 }
 
 // ------------------------------------------------------------ overlay windows
-enum Type { T_BAR = 0, T_LEFT, T_RIGHT, T_TOP, T_PANEL, NB_OV };
+enum Type { T_FLASH = 0, T_BAR, T_LEFT, T_RIGHT, T_TOP, T_PANEL, NB_OV };
 
 struct Overlay {
     Type type = T_BAR;
@@ -529,6 +548,7 @@ struct Overlay {
 };
 
 static Overlay gOv[NB_OV];
+static int gGlowPx = 0;            // size of the flash glow in screen pixels
 static bool gMove = false;         // move mode
 static bool gPanelOpen = false;
 static bool gGearHover = false;    // cursor is over the gear (bar becomes clickable)
@@ -546,6 +566,7 @@ static struct {
     int litL = 0, litR = 0;
     std::wstring message;
     double messageEnd = 0, lastShotTime = -999;
+    float flashIntensity = 1.f;   // 0..1, depends on how loud (close) the last shot was
     unsigned serial = 0;
 } gBar;
 
@@ -609,6 +630,11 @@ static void DrawBar(Overlay* o, double now) {
     { Pen p(Col(gTheme.barTrackCenter), 2.f); g->DrawLine(&p, center, trackY - 5, center, trackY + 5); }
 
     const float half = (W - 2 * (margin + 26)) / 2;
+    {   // ticks at -45 and +45 degrees (the track covers -90 .. +90)
+        Pen p(Col(gTheme.barTrackCenter), 1.5f);
+        g->DrawLine(&p, center - half * 0.5f, trackY - 3, center - half * 0.5f, trackY + 3);
+        g->DrawLine(&p, center + half * 0.5f, trackY - 3, center + half * 0.5f, trackY + 3);
+    }
     const float mx = center + gBar.balance * half;
     const float t = (gBar.balance + 1.f) / 2.f;
     auto mix = [&](int shift) {   // blend left color -> right color
@@ -633,6 +659,40 @@ static void DrawBar(Overlay* o, double now) {
     } else if (now < gBar.messageEnd) {
         Text(g, gBar.message.c_str(), 11, false, Col(gTheme.barMessage), 0, 1, W, 14, StringAlignmentCenter);
     }
+}
+
+// Soft glow around the bar container, shown when a shot is detected. Many thin
+// translucent layers stack up into a smooth falloff: the opacity of the color
+// (AA) is reached at the container edge and fades to 0 over kFlashGlow pixels.
+// The container itself is excluded, so only the outside is tinted.
+static void DrawFlash(Overlay* o) {
+    Graphics* g = o->g;
+    g->ResetTransform();
+    g->ScaleTransform(o->scale, o->scale);
+    const uint32_t c = gTheme.shotFlash;
+    const float peak = Clampf((float)(c >> 24) / 255.f, 0.f, 0.995f);
+    if (peak <= 0.f) return;   // alpha 00 = flash disabled
+    // number of stacked layers: one pixel each, but never so many that a single layer
+    // would need an opacity below 1/255 (very faint flashes use fewer, wider-spaced layers)
+    const int maxLayers = (int)kFlashGlow;
+    const float fewest = logf(1.f - peak) / logf(1.f - 1.f / 255.f);
+    const int layers = max(1, min(maxLayers, (int)(fewest + 0.5f)));
+    const float a = 1.f - powf(1.f - peak, 1.f / layers);
+    const BYTE alpha = (BYTE)max(1, (int)(a * 255.f + 0.5f));
+
+    GraphicsPath hole;
+    RoundRectPath(hole, kFlashGlow + 1, kFlashGlow + 1, kBarW - 2, kBarH - 2, 13);
+    Region clip(RectF(0.f, 0.f, kBarW + 2 * kFlashGlow, kBarH + 2 * kFlashGlow));
+    clip.Exclude(&hole);
+    g->SetClip(&clip);
+    SolidBrush brush(Color(alpha, (BYTE)(c >> 16), (BYTE)(c >> 8), (BYTE)c));
+    for (int j = 0; j < layers; j++) {
+        const float k = kFlashGlow * (layers - j) / layers;   // outermost layer first
+        GraphicsPath path;
+        RoundRectPath(path, kFlashGlow - k, kFlashGlow - k, kBarW + 2.f * k, kBarH + 2.f * k, 14.f + k);
+        g->FillPath(&brush, &path);
+    }
+    g->ResetClip();
 }
 
 static void DrawIndicator(Overlay* o) {
@@ -665,18 +725,19 @@ static const SliderDef kSliders[5] = {
     {L"Shot detection sensitivity", L"Right: quieter or more distant shots are detected", -5.f, -60.f, 0, L" dB", 1},
     {L"Sound suddenness (shots)", L"Right: also accepts less abrupt sounds", 24.f, 4.f, 0, L" dB", 1},
     {L"\"Center\" zone (top indicator)", L"Right: more shots are classified as \"top\"", 1.f, 10.f, 0, L" dB", 2},
-    {L"Indicator duration", L"How long a shot stays visible on the screen edges", 0.5f, 3.0f, 1, L" s", 2},
+    {L"Indicator duration", L"How long edge indicators and the flash stay visible", 0.5f, 3.0f, 1, L" s", 2},
 };
 static uint32_t AccentColor(int kind) {
     return kind == 0 ? gTheme.accentBars : (kind == 1 ? gTheme.accentShots : gTheme.accentOther);
 }
 
 // panel buttons: 0 move, 1 reset positions, 2 edit colors, 3 reset colors, 4 reset settings, 5 quit
-static const int kButtonCount = 6, kCloseButton = 6;
-static const float kPanelW = 380.f, kPanelH = 574.f, kTrackX0 = 18.f, kTrackX1 = 362.f;
+static const int kButtonCount = 6, kCloseButton = 6, kToggleButton = 7;
+static const float kToggleY = 376.f, kToggleH = 30.f;   // shot flash switch row
+static const float kPanelW = 380.f, kPanelH = 614.f, kTrackX0 = 18.f, kTrackX1 = 362.f;
 static const float kSliderY0 = 52.f, kSliderStep = 64.f;
 static const float kBtnX[6] = {18.f, 195.f, 18.f, 195.f, 18.f, 195.f};
-static const float kBtnY[6] = {446.f, 446.f, 486.f, 486.f, 526.f, 526.f};
+static const float kBtnY[6] = {486.f, 486.f, 526.f, 526.f, 566.f, 566.f};
 static const float kBtnW = 167.f, kBtnH = 32.f;
 
 static float GetSlider(int i) {
@@ -743,18 +804,31 @@ static void DrawPanel(Overlay* o) {
         Text(g, d.hint, 11, false, Col(gTheme.panelHint), kTrackX0, y0 + 42, kTrackX1 - kTrackX0, 16, StringAlignmentNear);
     }
 
+    // shot flash switch
+    {
+        if (gHoverButton == kToggleButton)
+            FillRR(g, ColA(gTheme.buttonHover, 120), kTrackX0 - 6, kToggleY, kTrackX1 - kTrackX0 + 12, kToggleH, 8);
+        Text(g, L"Flash on shots (brighter when closer)", 13, false, Col(gTheme.panelText),
+             kTrackX0, kToggleY, 290, kToggleH, StringAlignmentNear);
+        const float sw = 40, sh = 20, sx = kTrackX1 - sw, sy = kToggleY + (kToggleH - sh) / 2;
+        FillRR(g, Col(gFlashOn ? gTheme.toggleOn : gTheme.toggleOff), sx, sy, sw, sh, 10);
+        SolidBrush thumb(Col(gTheme.toggleThumb));
+        const float cx = gFlashOn ? sx + sw - 10 : sx + 10;
+        g->FillEllipse(&thumb, cx - 8, sy + sh / 2 - 8, 16.f, 16.f);
+    }
+
     // live level meter
     const float level = gBar.levelDb;
     wchar_t buf[64];
     if (level <= -89.f) _snwprintf(buf, 64, L"Current level: silence");
     else _snwprintf(buf, 64, L"Current level: %.0f dB", level);
-    Text(g, buf, 12, false, Col(gTheme.panelText), kTrackX0, 378, 180, 18, StringAlignmentNear);
+    Text(g, buf, 12, false, Col(gTheme.panelText), kTrackX0, 418, 180, 18, StringAlignmentNear);
     float lastShot = LastShotDb();
     if (lastShot < -900.f) _snwprintf(buf, 64, L"Last shot: none");
     else _snwprintf(buf, 64, L"Last shot: %.0f dB", lastShot);
-    Text(g, buf, 12, false, Col(gTheme.panelText), 190, 378, 172, 18, StringAlignmentFar);
+    Text(g, buf, 12, false, Col(gTheme.panelText), 190, 418, 172, 18, StringAlignmentFar);
 
-    const float meterW = kTrackX1 - kTrackX0, meterY = 402.f;
+    const float meterW = kTrackX1 - kTrackX0, meterY = 442.f;
     auto xOf = [&](float db) { return kTrackX0 + Clampf((db + 90.f) / 90.f, 0.f, 1.f) * meterW; };
     FillRR(g, Col(gTheme.meterBackground), kTrackX0, meterY, meterW, 8, 4);
     float fillW = xOf(level) - kTrackX0;
@@ -767,8 +841,8 @@ static void DrawPanel(Overlay* o) {
     const wchar_t* lt[3] = {L"bars threshold", L"shots threshold", L"last shot"};
     const uint32_t lc[3] = {gTheme.tickBars, gTheme.tickShots, gTheme.tickLastShot};
     for (int i = 0; i < 3; i++) {
-        FillRR(g, Col(lc[i]), lx[i], 423.f, 8, 8, 2);
-        Text(g, lt[i], 11, false, Col(gTheme.panelHint), lx[i] + 12, 418, 100, 18, StringAlignmentNear);
+        FillRR(g, Col(lc[i]), lx[i], 463.f, 8, 8, 2);
+        Text(g, lt[i], 11, false, Col(gTheme.panelHint), lx[i] + 12, 458, 100, 18, StringAlignmentNear);
     }
 
     // buttons
@@ -803,6 +877,7 @@ static void Refresh(Overlay* o, unsigned long long sig, int alpha, double now) {
         o->sig = sig;
         o->g->Clear(Color(0, 0, 0, 0));
         switch (o->type) {
+            case T_FLASH: DrawFlash(o); break;
             case T_BAR:   DrawBar(o, now); break;
             case T_PANEL: DrawPanel(o); break;
             default:      DrawIndicator(o); break;
@@ -822,6 +897,7 @@ static unsigned long long PanelSignature() {
     mix(gActiveSlider);
     mix(gHoverButton);
     mix(gMove ? 1 : 0);
+    mix(gFlashOn ? 1 : 0);
     mix((long long)floorf(gBar.levelDb * 2.f));
     mix((long long)floorf(LastShotDb()));
     return h;
@@ -837,7 +913,7 @@ static void SetClickThrough(Overlay* o, bool through) {
 }
 
 static void SetMoveMode(Overlay* o, bool on) {
-    if (o->type == T_PANEL) return;
+    if (o->type == T_PANEL || o->type == T_FLASH) return;   // the flash follows the bar
     o->moveMode = on;
     SetClickThrough(o, !on);
     o->sig = ~0ULL;
@@ -847,11 +923,11 @@ static void SetMoveMode(Overlay* o, bool on) {
 static HWND gMsgWnd = nullptr;
 static NOTIFYICONDATAW gNid = {};
 static const UINT WM_TRAY = WM_APP + 1;
-enum { ID_PANEL = 100, ID_MOVE, ID_BARS_UP, ID_BARS_DOWN, ID_SHOTS_UP, ID_SHOTS_DOWN, ID_QUIT };
+enum { ID_PANEL = 100, ID_MOVE, ID_BARS_UP, ID_BARS_DOWN, ID_SHOTS_UP, ID_SHOTS_DOWN, ID_FLASH, ID_QUIT };
 
 static void SavePositions() {
     for (auto& o : gOv) {
-        if (o.type == T_PANEL && !o.savedPos) continue;
+        if (o.type == T_FLASH || (o.type == T_PANEL && !o.savedPos)) continue;
         wchar_t kx[32], ky[32];
         _snwprintf(kx, 32, L"%ls_x", o.name);
         _snwprintf(ky, 32, L"%ls_y", o.name);
@@ -908,7 +984,19 @@ static void AdjustShots(float delta) {
     SetMessage(buf);
 }
 
+static void ToggleFlash() {
+    gFlashOn = !gFlashOn;
+    SaveSettings();
+    if (gFlashOn) {   // test flash, so the effect is visible right away
+        gBar.lastShotTime = Now();
+        gBar.flashIntensity = 1.f;
+    }
+    SetMessage(gFlashOn ? L"Shot flash: ON" : L"Shot flash: OFF");
+}
+
 static void ResetSettings() {
+    gFlashOn = true;
+    gFlashMin = kDefaultFlashMin;
     gBarsDb = kDefaultBarsDb;
     gShotDb = kDefaultShotDb;
     gSuddenness = kDefaultSuddenness;
@@ -920,6 +1008,7 @@ static void ResetSettings() {
 
 static void ResetPositions() {
     for (auto& o : gOv) {
+        if (o.type == T_FLASH) continue;
         if (o.type == T_PANEL) { o.savedPos = false; continue; }
         o.x = o.defX; o.y = o.defY;
         SetWindowPos(o.hwnd, nullptr, o.x, o.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1002,6 +1091,7 @@ static bool CursorOverGear() {
 // ------------------------------------------------------------ panel mouse input
 static int PanelHit(float lx, float ly) {
     if (lx >= 336 && lx <= 362 && ly >= 9 && ly <= 35) return kCloseButton;
+    if (lx >= kTrackX0 - 6 && lx <= kTrackX1 + 6 && ly >= kToggleY && ly <= kToggleY + kToggleH) return kToggleButton;
     for (int i = 0; i < kButtonCount; i++)
         if (lx >= kBtnX[i] && lx <= kBtnX[i] + kBtnW && ly >= kBtnY[i] && ly <= kBtnY[i] + kBtnH) return i;
     return -1;
@@ -1020,6 +1110,7 @@ static void PanelAction(int b) {
         case 4: ResetSettings(); break;
         case 5: PostQuitMessage(0); break;
         case kCloseButton: TogglePanel(); break;
+        case kToggleButton: ToggleFlash(); break;
     }
 }
 
@@ -1145,6 +1236,7 @@ static bool CreateOverlay(Overlay* o, HINSTANCE hi) {
 static void Tick() {
     static double last = Now();
     static int shotCounter = 0;
+    static int shotRev = 0;
     static float targetBalance = 0.f;
     static int topCounter = 0;
 
@@ -1175,12 +1267,28 @@ static void Tick() {
     int count = gAudio.shotCount;
     if (count != shotCounter) {
         shotCounter = count;
-        targetBalance = Clampf(gAudio.lastDiff / kBalanceFullDb, -1.f, 1.f);
-        gBar.lastShotTime = now;
+        gBar.lastShotTime = now;   // starts the flash and the marker pulse
+    }
+    int rev = gAudio.shotRev;
+    if (rev != shotRev) {
+        shotRev = rev;
+        // The track covers -90 .. +90 degrees. The position is the difference between
+        // the right and left fill levels of the volume bars (same scale as the LEDs):
+        // 75% left and 25% right = 50% to the left = 45 degrees to the left.
+        float fillL = frac(gAudio.shotL), fillR = frac(gAudio.shotR);
+        targetBalance = Clampf(fillR - fillL, -1.f, 1.f);
+        // Flash intensity follows the loudness of the shot (louder = closer = brighter):
+        // flash_min_intensity at the detection threshold, 1.0 at kFlashFullDb.
+        float loud = max((float)gAudio.shotL, (float)gAudio.shotR);
+        float shotFloor = gShotDb;
+        float loudness = Clampf((loud - shotFloor) / max(3.f, kFlashFullDb - shotFloor), 0.f, 1.f);
+        gBar.flashIntensity = gFlashMin + (1.f - gFlashMin) * loudness;
         if (gDebug) {
             wchar_t buf[128];
-            _snwprintf(buf, 128, L"Shot: L %.0f / R %.0f dB (threshold %.0f)",
-                       (float)gAudio.shotL, (float)gAudio.shotR, (float)gShotDb);
+            _snwprintf(buf, 128, L"Shot: L %.0f / R %.0f dB -> %.0f deg %ls, flash %.0f%%",
+                       (float)gAudio.shotL, (float)gAudio.shotR, fabsf(targetBalance) * 90.f,
+                       targetBalance < -0.005f ? L"left" : (targetBalance > 0.005f ? L"right" : L""),
+                       gBar.flashIntensity * 100.f);
             SetMessage(buf);
         }
     }
@@ -1213,13 +1321,27 @@ static void Tick() {
 
     // --- screen-edge indicators: full intensity for 25% of the duration, then fade out
     const double duration = gDuration, hold = duration * 0.25;
+    auto fadeOf = [&](double since) -> float {
+        if (since < hold) return 1.f;
+        if (since < duration) return (float)(1.0 - (since - hold) / (duration - hold));
+        return 0.f;
+    };
     for (int i = 0; i < 3; i++) {
-        double since = now - gAudio.shotTime[i];
-        float v;
-        if (since < hold) v = 1.f;
-        else if (since < duration) v = (float)(1.0 - (since - hold) / (duration - hold));
-        else v = 0.f;
+        float v = fadeOf(now - gAudio.shotTime[i]);
         Refresh(&gOv[T_LEFT + i], gMove ? 1ULL : 0ULL, gMove ? 255 : (int)(v * 255.f + 0.5f), now);
+    }
+
+    // --- flash around the bar container: same timing as the edge indicators
+    {
+        Overlay* fl = &gOv[T_FLASH];
+        const int nx = gOv[T_BAR].x - gGlowPx, ny = gOv[T_BAR].y - gGlowPx;
+        if (fl->x != nx || fl->y != ny) {   // follow the bar when it is moved
+            fl->x = nx; fl->y = ny;
+            Present(fl, max(fl->lastAlpha, 0));
+        }
+        float v = gFlashOn ? fadeOf(now - gBar.lastShotTime) * gBar.flashIntensity : 0.f;
+        int alpha = gMove ? (gFlashOn ? 255 : 0) : (int)(v * 255.f + 0.5f);   // move mode: permanent preview
+        Refresh(fl, 2ULL, alpha, now);
     }
 
     // --- settings panel
@@ -1262,6 +1384,7 @@ static LRESULT CALLBACK MessageProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 AppendMenuW(menu, MF_STRING, ID_BARS_DOWN, L"Bars: less sensitive (F10)");
                 AppendMenuW(menu, MF_STRING, ID_SHOTS_UP, L"Shots: more sensitive (F11)");
                 AppendMenuW(menu, MF_STRING, ID_SHOTS_DOWN, L"Shots: less sensitive (F12)");
+                AppendMenuW(menu, MF_STRING | (gFlashOn ? MF_CHECKED : 0), ID_FLASH, L"Shot flash");
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(menu, MF_STRING, ID_QUIT, L"Quit");
                 POINT pt; GetCursorPos(&pt);
@@ -1279,6 +1402,7 @@ static LRESULT CALLBACK MessageProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 case ID_BARS_DOWN: AdjustBars(+5.f); break;
                 case ID_SHOTS_UP: AdjustShots(-3.f); break;
                 case ID_SHOTS_DOWN: AdjustShots(+3.f); break;
+                case ID_FLASH: ToggleFlash(); break;
                 case ID_QUIT: PostQuitMessage(0); break;
             }
             return 0;
@@ -1326,6 +1450,8 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     gCenterZone = Clampf(IniFloat(L"settings", L"center_zone_db", kDefaultCenterZone), 1.f, 10.f);
     gDuration = Clampf(IniFloat(L"settings", L"indicator_duration_s", kDefaultDuration), 0.5f, 3.f);
     gDebug = IniInt(L"settings", L"debug", 0) != 0;   // debug=1 shows each detected shot in the bar
+    gFlashOn = IniInt(L"settings", L"flash_enabled", 1) != 0;
+    gFlashMin = Clampf(IniFloat(L"settings", L"flash_min_intensity", kDefaultFlashMin), 0.f, 1.f);
     EnsureColorSection();   // writes the documented [colors] section on first run
     LoadTheme();
     IniChanged();           // remember the file time (for live reload)
@@ -1370,6 +1496,10 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     gOv[T_TOP].type = T_TOP; gOv[T_TOP].name = L"top"; gOv[T_TOP].label = L"TOP";
     gOv[T_TOP].w = length; gOv[T_TOP].h = thick; gOv[T_TOP].x = (sw - length) / 2; gOv[T_TOP].y = (int)(6 * s);
 
+    gGlowPx = (int)(kFlashGlow * sb + 0.5f);
+    gOv[T_FLASH].type = T_FLASH; gOv[T_FLASH].name = L"flash";
+    gOv[T_FLASH].w = barW + 2 * gGlowPx; gOv[T_FLASH].h = barH + 2 * gGlowPx; gOv[T_FLASH].scale = sb;
+
     gOv[T_PANEL].type = T_PANEL; gOv[T_PANEL].name = L"panel";
     gOv[T_PANEL].w = (int)(kPanelW * sb + 0.5f); gOv[T_PANEL].h = (int)(kPanelH * sb + 0.5f); gOv[T_PANEL].scale = sb;
 
@@ -1377,6 +1507,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
 
     // --- saved positions (only if still on a screen)
     for (auto& o : gOv) {
+        if (o.type == T_FLASH) continue;   // follows the bar
         wchar_t kx[32], ky[32];
         _snwprintf(kx, 32, L"%ls_x", o.name);
         _snwprintf(ky, 32, L"%ls_y", o.name);
@@ -1388,6 +1519,9 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
             if (MonitorFromPoint(p, MONITOR_DEFAULTTONULL)) { o.x = x; o.y = y; o.savedPos = true; }
         }
     }
+
+    gOv[T_FLASH].x = gOv[T_BAR].x - gGlowPx;
+    gOv[T_FLASH].y = gOv[T_BAR].y - gGlowPx;
 
     for (auto& o : gOv) {
         if (!CreateOverlay(&o, hi)) {
