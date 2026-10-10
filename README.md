@@ -11,7 +11,7 @@ It was built as an accessibility aid for players who are deaf or hard of hearing
 
 ## Quick start
 
-1. Download latest release: [AudioSight.exe]([https://github.com/Lespleiades/AudioSight/releases/tag/executable](https://github.com/Lespleiades/AudioSight/releases) or [build it yourself](#building).
+1. Download latest release: [AudioSight.exe](https://github.com/Lespleiades/AudioSight/releases) or [build it yourself](#building).
 2. Put it in its own folder (it creates `AudioSight.ini` next to itself) and run it.
 3. Set your game to **Borderless Windowed** (see [Limitations](#limitations)).
 4. Press **F8** to place the elements where you want them, press **F8** again to confirm.
