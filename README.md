@@ -3,25 +3,11 @@
 
 <img width="1920" height="1080" alt="AudioSight" src="https://github.com/user-attachments/assets/3e06dc0f-0486-412a-8921-c57a9260ef01" />
 
-A tiny Windows overlay that shows **where sounds come from** in a game: a left/right volume bar, a marker that remembers the direction of the last shot, and indicators on the screen edges that flash when a loud sound is detected on that side.
-
-It was built as an **accessibility aid for players who are deaf in one ear, hard of hearing or simply deaf** in shooters and other games or functionalities.
+A overlay that shows where sounds come from in a shooter game.
+It was built as an accessibility aid for players who are deaf or hard of hearing.
 
 <!-- Add a screenshot here, e.g. docs/screenshot.png -->
 <!-- ![Screenshot](docs/screenshot.png) -->
-
-- Single small `.exe`, **no installation, no dependencies**
-- Works with any game: it reads the Windows audio output, not the game
-
-## Features
-
-| Element | What it does |
-|---|---|
-| **Volume bar** | LED-style bars showing the left and right output level in real time. |
-| **Direction marker** | A marker under the bar that jumps to the direction of the **last detected shot** and stays there, so you can glance at it a second later. |
-| **Edge indicators** | Green indicators on the left, right and top edges of the screen. Invisible by default; the one matching the direction of a shot lights up and fades out after about a second. A centered sound lights the top one. |
-| **Settings panel** | Click the gear icon in the bar container: sliders for every threshold, a live level meter, and placement tools. |
-| **Move mode** | Drag every element anywhere on screen to fit your game's HUD. Positions are saved. |
 
 ## Quick start
 
@@ -30,6 +16,10 @@ It was built as an **accessibility aid for players who are deaf in one ear, hard
 3. Set your game to **Borderless Windowed** (see [Limitations](#limitations)).
 4. Press **F8** to place the elements where you want them, press **F8** again to confirm.
 5. Press **F7** (or click the gear) to open the settings and tune the sensitivity.
+
+## Important
+
+Select **Borderless Windowed** in your options game menu.
 
 ## Hotkeys
 
@@ -41,24 +31,6 @@ Global hotkeys, they work while the game has focus.
 | **F8** | Move mode on / off (drag elements with the mouse, press again to save) |
 | **F9** / **F10** | Volume bars more / less sensitive |
 | **F11** / **F12** | Shot detection more / less sensitive |
-
-## Tuning the detection
-
-Open the settings panel and play for a moment. The **live meter** shows the current sound level with three marks:
-
-- purple tick: the volume bars threshold
-- green tick: the shot detection threshold and the level of the last detected shot
-
-
-| Setting | Meaning |
-|---|---|
-| Volume bars sensitivity | Level at which the bars start to show (right = quieter sounds appear). |
-| Shot detection sensitivity | Minimum level for a sound to count as a shot. |
-| Sound suddenness | How much a sound must rise above the background level. Lower = also accepts less abrupt sounds. |
-| "Center" zone | Left/right difference (dB) under which a shot is classified as "center" (top indicator). |
-| Indicator duration | How long an edge indicator stays visible. |
-
-Settings and positions are stored in `AudioSight.ini` next to the executable. Adding `debug=1` under `[settings]` prints every detected shot's levels in the bar, which helps tuning.
 
 ## How it works
 
@@ -78,7 +50,7 @@ The program does **not** read or modify game memory, does not inject anything an
 
 ### Cautions
 
-This tool **only presents audio information from you PC visually**. Still, rules differ between games, servers and tournaments: **check that overlays and accessibility tools are allowed where you play**.
+This tool **only presents audio information from your device audio output**. Still, rules differ between games, servers and tournaments: **check that overlays and accessibility tools are allowed where you play**.
 
 ## Windows Release
 
