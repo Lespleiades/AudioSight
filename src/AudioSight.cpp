@@ -14,6 +14,11 @@
 //    F11 : shot detection more sensitive   F12 : less sensitive
 //  Notification area icon: click for a menu (including "Quit").
 //
+//  Sound graph (bottom of the screen): the loudness of the last 5 seconds,
+//  scrolling in real time, to recognize a sound by its "signature"
+//  (footsteps, leaves, birds, gunshots...). Can be switched on/off in the
+//  settings panel or in the notification area menu.
+//
 //
 //  Build (MinGW-w64):
 //    g++ -O2 -s -mwindows -static -static-libgcc -static-libstdc++
@@ -76,6 +81,8 @@ static const float  kFlashFullDb         = -15.0f;  // shot level (dB) that give
 static const float  kDefaultFlashMin     = 0.20f;   // flash intensity of the quietest detectable shot (0..1)
 static const int    kSegments            = 20;      // segments per side in the volume bar
 static const float  kRestOpacity         = 0.30f;   // bar opacity when nothing happens
+static const double kGraphSeconds        = 5.0;     // time span shown by the sound graph (s)
+static const double kGraphGap            = 0.08;    // s without audio data after which the graph falls back to zero
 
 static const int kVkPanel = VK_F7, kVkMove = VK_F8, kVkBarsUp = VK_F9,
                  kVkBarsDown = VK_F10, kVkShotsUp = VK_F11, kVkShotsDown = VK_F12;
@@ -98,6 +105,7 @@ static std::atomic<float> gBarsDb(kDefaultBarsDb), gShotDb(kDefaultShotDb),
 static float gDuration = kDefaultDuration;
 static bool gDebug = false;
 static bool gFlashOn = true;                 // shot flash enabled (default: on)
+static bool gGraphOn = true;                 // sound graph enabled (default: on)
 static float gFlashMin = kDefaultFlashMin;   // flash intensity of the quietest shot
 static std::wstring gIniPath;
 
@@ -129,6 +137,7 @@ static void IniWriteFloat2(const wchar_t* sec, const wchar_t* key, float v) {
 }
 static void SaveSettings() {
     IniWriteInt(L"settings", L"flash_enabled", gFlashOn ? 1 : 0);
+    IniWriteInt(L"settings", L"graph_enabled", gGraphOn ? 1 : 0);
     IniWriteFloat2(L"settings", L"flash_min_intensity", gFlashMin);
     IniWriteFloat(L"settings", L"bars_threshold_db", gBarsDb);
     IniWriteFloat(L"settings", L"shots_threshold_db", gShotDb);
@@ -194,7 +203,14 @@ static void SaveSettings() {
     X(buttonActive,       L"button_move_active",    0xFF5A4E14, "Move button while move mode is on") \
     X(buttonQuit,         L"button_quit",           0xFF54222A, "Quit button") \
     X(buttonQuitHover,    L"button_quit_hover",     0xFF822A32, "Quit button when hovered") \
-    X(trayIconBackground, L"tray_icon_background",  0xFF0C0E14, "Background of the notification area icon")
+    X(trayIconBackground, L"tray_icon_background",  0xFF0C0E14, "Background of the notification area icon") \
+    X(graphBackground,    L"graph_background",      0xAA0C0E14, "Background of the sound graph container") \
+    X(graphBorder,        L"graph_border",          0x28FFFFFF, "Outline of the sound graph container") \
+    X(graphLine,          L"graph_line",            0xFF28E119, "Curve of the sound graph (sound signature of the last 5 seconds)") \
+    X(graphFill,          L"graph_fill",            0x4628E119, "Area under the curve of the sound graph (AA 00 = line only)") \
+    X(graphBaseline,      L"graph_baseline",        0x6428E119, "Zero line at the bottom of the sound graph") \
+    X(graphGrid,          L"graph_grid",            0x14FFFFFF, "Vertical lines of the sound graph (one per second)") \
+    X(graphShotLine,      L"graph_shot_threshold",  0x50FFDC00, "Dashed line showing the shot detection threshold on the sound graph (AA 00 hides it)")
 
 struct Theme {
 #define X(field, key, def, desc) uint32_t field = def;
@@ -313,6 +329,13 @@ struct AudioState {
 static AudioState gAudio;
 static std::atomic<bool> gRun(true);
 
+// History of the loudness (one value per analysis block, ~21 ms) used by the
+// sound graph. Ring buffer written by the audio thread, read by the UI thread.
+static const unsigned kHistCap = 1024;               // > 5 s of blocks, with plenty of margin
+static std::atomic<double>   gHistT[kHistCap];       // time of the block
+static std::atomic<float>    gHistDb[kHistCap];      // level (dB) of the block
+static std::atomic<unsigned> gHistHead(0);           // number of blocks written so far
+
 // Shot detector: a shot is a sound that is loud enough AND rises abruptly
 // above the slowly-tracked background level.
 struct Detector {
@@ -332,6 +355,14 @@ static void FinishBlock(Detector& d, double sumL, double sumR, int n) {
     const float suddenness = gSuddenness, centerZone = gCenterZone, shotThreshold = gShotDb;
     float level = max(l, r);
     double t = Now();
+
+    {   // record the level for the sound graph
+        const unsigned h = gHistHead.load(std::memory_order_relaxed);
+        gHistT[h % kHistCap] = t;
+        gHistDb[h % kHistCap] = level;
+        gHistHead.store(h + 1, std::memory_order_release);
+    }
+
     if (level > shotThreshold && level > d.background + suddenness && t - d.lastShot > kShotCooldown) {
         float diff = r - l;
         int side = diff < -centerZone ? 0 : (diff > centerZone ? 1 : 2);
@@ -533,7 +564,7 @@ static void Text(Graphics* g, const wchar_t* s, float px, bool bold, Color c,
 }
 
 // ------------------------------------------------------------ overlay windows
-enum Type { T_FLASH = 0, T_BAR, T_LEFT, T_RIGHT, T_TOP, T_PANEL, NB_OV };
+enum Type { T_FLASH = 0, T_BAR, T_LEFT, T_RIGHT, T_TOP, T_GRAPH, T_PANEL, NB_OV };
 
 struct Overlay {
     Type type = T_BAR;
@@ -566,6 +597,9 @@ static int  gHoverButton = -1;
 static const float kBarW = 560.f, kBarH = 86.f;   // whole container
 static const float kContentW = 520.f;             // volume bars + marker area
 static const float kGearX = 524.f;                // start of the gear column
+
+// Logical (unscaled) size of the sound graph container
+static const float kGraphW = 560.f, kGraphH = 86.f;
 
 // State of the bar
 static struct {
@@ -718,6 +752,95 @@ static void DrawIndicator(Overlay* o) {
     }
 }
 
+// Sound graph: loudness of the last kGraphSeconds seconds, scrolling to the left.
+// The vertical scale is the same as the volume bars (bars threshold = bottom,
+// kBarsMaxDb = top), so the F9 / F10 sensitivity also applies to the graph.
+static void DrawGraph(Overlay* o, double now) {
+    Graphics* g = o->g;
+    g->ResetTransform();
+    g->ScaleTransform(o->scale, o->scale);
+    const float W = kGraphW, H = kGraphH;
+
+    FillRR(g, Col(gTheme.graphBackground), 0.5f, 0.5f, W - 1, H - 1, 14);
+    { Pen p(Col(gTheme.graphBorder), 1.f); StrokeRR(g, p, 0.5f, 0.5f, W - 1, H - 1, 14); }
+
+    // plotting area
+    const float x0 = 12.f, x1 = W - 12.f, yTop = 12.f, yBase = H - 12.f;
+    const float pw = x1 - x0, ph = yBase - yTop;
+    const float floorDb = gBarsDb;
+    auto frac = [&](float db) { return Clampf((db - floorDb) / (kBarsMaxDb - floorDb), 0.f, 1.f); };
+
+    // one thin vertical line per second
+    {
+        Pen p(Col(gTheme.graphGrid), 1.f);
+        const int secs = (int)(kGraphSeconds + 0.5);
+        for (int s = 1; s < secs; s++) {
+            const float x = x0 + pw * (float)s / (float)secs;
+            g->DrawLine(&p, x, yTop, x, yBase);
+        }
+    }
+
+    // shot detection threshold
+    {
+        const float ft = frac(gShotDb);
+        if (ft > 0.01f && ft < 0.99f) {
+            Pen p(Col(gTheme.graphShotLine), 1.f);
+            p.SetDashStyle(DashStyleDash);
+            const float y = yBase - ft * ph;
+            g->DrawLine(&p, x0, y, x1, y);
+        }
+    }
+
+    // zero line
+    { Pen p(Col(gTheme.graphBaseline), 1.f); g->DrawLine(&p, x0, yBase, x1, yBase); }
+
+    // curve: one point per analysis block; a pause in the audio data counts as silence
+    std::vector<PointF> pts;
+    pts.reserve(400);
+    const double t0 = now - kGraphSeconds;
+    auto add = [&](double t, float f) {
+        const float x = x0 + (float)((t - t0) / kGraphSeconds) * pw;
+        pts.push_back(PointF(Clampf(x, x0, x1), yBase - f * ph));
+    };
+    add(t0, 0.f);
+    double prevT = t0;
+    bool have = false;
+    const unsigned head = gHistHead.load(std::memory_order_acquire);
+    const unsigned count = head < kHistCap ? head : kHistCap;
+    for (unsigned i = head - count; i != head; i++) {
+        const double t = gHistT[i % kHistCap];
+        const float db = gHistDb[i % kHistCap];
+        if (t <= prevT) continue;   // too old (or overwritten while reading)
+        if (t - prevT > kGraphGap) {
+            if (have) add(prevT + 0.02, 0.f);
+            add(t - 0.02, 0.f);
+        }
+        add(t, frac(db));
+        prevT = t;
+        have = true;
+    }
+    if (now - prevT > kGraphGap) {   // no recent data: back to zero until now
+        if (have) add(prevT + 0.02, 0.f);
+        add(now, 0.f);
+    }
+    if (pts.size() >= 2) {
+        std::vector<PointF> area(pts);
+        area.push_back(PointF(pts.back().X, yBase));
+        area.push_back(PointF(pts.front().X, yBase));
+        { SolidBrush b(Col(gTheme.graphFill)); g->FillPolygon(&b, area.data(), (INT)area.size()); }
+        Pen p(Col(gTheme.graphLine), 1.6f);
+        p.SetLineJoin(LineJoinRound);
+        g->DrawLines(&p, pts.data(), (INT)pts.size());
+    }
+
+    if (o->moveMode) {
+        Pen p(Col(gTheme.moveMode), 2.f); p.SetDashStyle(DashStyleDash);
+        StrokeRR(g, p, 2, 2, W - 4, H - 4, 10);
+        Text(g, L"SOUND GRAPH - drag with the mouse - press F8 to confirm", 11, true,
+             Col(gTheme.moveMode), 0, 1, W, 14, StringAlignmentCenter);
+    }
+}
+
 // ------------------------------------------------------------ settings panel
 struct SliderDef {
     const wchar_t* label;
@@ -739,12 +862,13 @@ static uint32_t AccentColor(int kind) {
 }
 
 // panel buttons: 0 move, 1 reset positions, 2 edit colors, 3 reset colors, 4 reset settings, 5 quit
-static const int kButtonCount = 6, kCloseButton = 6, kToggleButton = 7;
+static const int kButtonCount = 6, kCloseButton = 6, kToggleButton = 7, kGraphToggleButton = 8;
 static const float kToggleY = 376.f, kToggleH = 30.f;   // shot flash switch row
-static const float kPanelW = 380.f, kPanelH = 614.f, kTrackX0 = 18.f, kTrackX1 = 362.f;
+static const float kToggle2Y = 410.f;                   // sound graph switch row
+static const float kPanelW = 380.f, kPanelH = 648.f, kTrackX0 = 18.f, kTrackX1 = 362.f;
 static const float kSliderY0 = 52.f, kSliderStep = 64.f;
 static const float kBtnX[6] = {18.f, 195.f, 18.f, 195.f, 18.f, 195.f};
-static const float kBtnY[6] = {486.f, 486.f, 526.f, 526.f, 566.f, 566.f};
+static const float kBtnY[6] = {520.f, 520.f, 560.f, 560.f, 600.f, 600.f};
 static const float kBtnW = 167.f, kBtnH = 32.f;
 
 static float GetSlider(int i) {
@@ -811,31 +935,32 @@ static void DrawPanel(Overlay* o) {
         Text(g, d.hint, 11, false, Col(gTheme.panelHint), kTrackX0, y0 + 42, kTrackX1 - kTrackX0, 16, StringAlignmentNear);
     }
 
-    // shot flash switch
-    {
-        if (gHoverButton == kToggleButton)
-            FillRR(g, ColA(gTheme.buttonHover, 120), kTrackX0 - 6, kToggleY, kTrackX1 - kTrackX0 + 12, kToggleH, 8);
-        Text(g, L"Flash on shots (brighter when closer)", 13, false, Col(gTheme.panelText),
-             kTrackX0, kToggleY, 290, kToggleH, StringAlignmentNear);
-        const float sw = 40, sh = 20, sx = kTrackX1 - sw, sy = kToggleY + (kToggleH - sh) / 2;
-        FillRR(g, Col(gFlashOn ? gTheme.toggleOn : gTheme.toggleOff), sx, sy, sw, sh, 10);
+    // switches (shot flash, sound graph)
+    auto drawToggle = [&](float y, int id, const wchar_t* label, bool on) {
+        if (gHoverButton == id)
+            FillRR(g, ColA(gTheme.buttonHover, 120), kTrackX0 - 6, y, kTrackX1 - kTrackX0 + 12, kToggleH, 8);
+        Text(g, label, 13, false, Col(gTheme.panelText), kTrackX0, y, 290, kToggleH, StringAlignmentNear);
+        const float sw = 40, sh = 20, sx = kTrackX1 - sw, sy = y + (kToggleH - sh) / 2;
+        FillRR(g, Col(on ? gTheme.toggleOn : gTheme.toggleOff), sx, sy, sw, sh, 10);
         SolidBrush thumb(Col(gTheme.toggleThumb));
-        const float cx = gFlashOn ? sx + sw - 10 : sx + 10;
+        const float cx = on ? sx + sw - 10 : sx + 10;
         g->FillEllipse(&thumb, cx - 8, sy + sh / 2 - 8, 16.f, 16.f);
-    }
+    };
+    drawToggle(kToggleY, kToggleButton, L"Flash on shots (brighter when closer)", gFlashOn);
+    drawToggle(kToggle2Y, kGraphToggleButton, L"Sound graph (last 5 seconds)", gGraphOn);
 
     // live level meter
     const float level = gBar.levelDb;
     wchar_t buf[64];
     if (level <= -89.f) _snwprintf(buf, 64, L"Current level: silence");
     else _snwprintf(buf, 64, L"Current level: %.0f dB", level);
-    Text(g, buf, 12, false, Col(gTheme.panelText), kTrackX0, 418, 180, 18, StringAlignmentNear);
+    Text(g, buf, 12, false, Col(gTheme.panelText), kTrackX0, 452, 180, 18, StringAlignmentNear);
     float lastShot = LastShotDb();
     if (lastShot < -900.f) _snwprintf(buf, 64, L"Last shot: none");
     else _snwprintf(buf, 64, L"Last shot: %.0f dB", lastShot);
-    Text(g, buf, 12, false, Col(gTheme.panelText), 190, 418, 172, 18, StringAlignmentFar);
+    Text(g, buf, 12, false, Col(gTheme.panelText), 190, 452, 172, 18, StringAlignmentFar);
 
-    const float meterW = kTrackX1 - kTrackX0, meterY = 442.f;
+    const float meterW = kTrackX1 - kTrackX0, meterY = 476.f;
     auto xOf = [&](float db) { return kTrackX0 + Clampf((db + 90.f) / 90.f, 0.f, 1.f) * meterW; };
     FillRR(g, Col(gTheme.meterBackground), kTrackX0, meterY, meterW, 8, 4);
     float fillW = xOf(level) - kTrackX0;
@@ -848,8 +973,8 @@ static void DrawPanel(Overlay* o) {
     const wchar_t* lt[3] = {L"bars threshold", L"shots threshold", L"last shot"};
     const uint32_t lc[3] = {gTheme.tickBars, gTheme.tickShots, gTheme.tickLastShot};
     for (int i = 0; i < 3; i++) {
-        FillRR(g, Col(lc[i]), lx[i], 463.f, 8, 8, 2);
-        Text(g, lt[i], 11, false, Col(gTheme.panelHint), lx[i] + 12, 458, 100, 18, StringAlignmentNear);
+        FillRR(g, Col(lc[i]), lx[i], 497.f, 8, 8, 2);
+        Text(g, lt[i], 11, false, Col(gTheme.panelHint), lx[i] + 12, 492, 100, 18, StringAlignmentNear);
     }
 
     // buttons
@@ -886,6 +1011,7 @@ static void Refresh(Overlay* o, unsigned long long sig, int alpha, double now) {
         switch (o->type) {
             case T_FLASH: DrawFlash(o); break;
             case T_BAR:   DrawBar(o, now); break;
+            case T_GRAPH: DrawGraph(o, now); break;
             case T_PANEL: DrawPanel(o); break;
             default:      DrawIndicator(o); break;
         }
@@ -905,6 +1031,7 @@ static unsigned long long PanelSignature() {
     mix(gHoverButton);
     mix(gMove ? 1 : 0);
     mix(gFlashOn ? 1 : 0);
+    mix(gGraphOn ? 1 : 0);
     mix((long long)floorf(gBar.levelDb * 2.f));
     mix((long long)floorf(LastShotDb()));
     return h;
@@ -930,7 +1057,7 @@ static void SetMoveMode(Overlay* o, bool on) {
 static HWND gMsgWnd = nullptr;
 static NOTIFYICONDATAW gNid = {};
 static const UINT WM_TRAY = WM_APP + 1;
-enum { ID_PANEL = 100, ID_MOVE, ID_BARS_UP, ID_BARS_DOWN, ID_SHOTS_UP, ID_SHOTS_DOWN, ID_FLASH, ID_QUIT };
+enum { ID_PANEL = 100, ID_MOVE, ID_BARS_UP, ID_BARS_DOWN, ID_SHOTS_UP, ID_SHOTS_DOWN, ID_FLASH, ID_GRAPH, ID_QUIT };
 
 static void SavePositions() {
     for (auto& o : gOv) {
@@ -1001,8 +1128,16 @@ static void ToggleFlash() {
     SetMessage(gFlashOn ? L"Shot flash: ON" : L"Shot flash: OFF");
 }
 
+static void ToggleGraph() {
+    gGraphOn = !gGraphOn;   // the window is shown / hidden by Tick()
+    SaveSettings();
+    gOv[T_GRAPH].sig = ~0ULL;
+    SetMessage(gGraphOn ? L"Sound graph: ON" : L"Sound graph: OFF");
+}
+
 static void ResetSettings() {
     gFlashOn = true;
+    gGraphOn = true;
     gFlashMin = kDefaultFlashMin;
     gBarsDb = kDefaultBarsDb;
     gShotDb = kDefaultShotDb;
@@ -1099,6 +1234,7 @@ static bool CursorOverGear() {
 static int PanelHit(float lx, float ly) {
     if (lx >= 336 && lx <= 362 && ly >= 9 && ly <= 35) return kCloseButton;
     if (lx >= kTrackX0 - 6 && lx <= kTrackX1 + 6 && ly >= kToggleY && ly <= kToggleY + kToggleH) return kToggleButton;
+    if (lx >= kTrackX0 - 6 && lx <= kTrackX1 + 6 && ly >= kToggle2Y && ly <= kToggle2Y + kToggleH) return kGraphToggleButton;
     for (int i = 0; i < kButtonCount; i++)
         if (lx >= kBtnX[i] && lx <= kBtnX[i] + kBtnW && ly >= kBtnY[i] && ly <= kBtnY[i] + kBtnH) return i;
     return -1;
@@ -1118,6 +1254,7 @@ static void PanelAction(int b) {
         case 5: PostQuitMessage(0); break;
         case kCloseButton: TogglePanel(); break;
         case kToggleButton: ToggleFlash(); break;
+        case kGraphToggleButton: ToggleGraph(); break;
     }
 }
 
@@ -1351,6 +1488,29 @@ static void Tick() {
         Refresh(fl, 2ULL, alpha, now);
     }
 
+    // --- sound graph (last kGraphSeconds seconds, scrolling in real time)
+    {
+        static double lastLoud = -999.0;
+        static int graphShown = -1;
+        Overlay* gr = &gOv[T_GRAPH];
+        if (max(dbL, dbR) > barsFloor) lastLoud = now;
+        if ((int)gGraphOn != graphShown) {   // show / hide the window when the switch changes
+            graphShown = gGraphOn ? 1 : 0;
+            ShowWindow(gr->hwnd, gGraphOn ? SW_SHOWNOACTIVATE : SW_HIDE);
+        }
+        if (gGraphOn) {
+            // While nothing audible happened during the last seconds the graph is a flat
+            // line: it is then drawn once instead of every frame (saves CPU).
+            const bool idle = now - lastLoud > kGraphSeconds + 0.3;
+            const unsigned long long frame = idle ? 0ULL : (unsigned long long)(now * 60.0) + 1ULL;
+            const unsigned long long gsig = frame * 1000003ULL
+                + (unsigned long long)(int)(-(float)gBarsDb) * 131ULL
+                + (unsigned long long)(int)(-(float)gShotDb) * 7ULL
+                + (gMove ? 100000000ULL : 0ULL);
+            Refresh(gr, gsig, gMove ? 255 : (int)(gBar.fade * 255.f + 0.5f), now);
+        }
+    }
+
     // --- settings panel
     if (gPanelOpen) Refresh(&gOv[T_PANEL], PanelSignature(), 255, now);
 
@@ -1392,6 +1552,7 @@ static LRESULT CALLBACK MessageProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 AppendMenuW(menu, MF_STRING, ID_SHOTS_UP, L"Shots: more sensitive (F11)");
                 AppendMenuW(menu, MF_STRING, ID_SHOTS_DOWN, L"Shots: less sensitive (F12)");
                 AppendMenuW(menu, MF_STRING | (gFlashOn ? MF_CHECKED : 0), ID_FLASH, L"Shot flash");
+                AppendMenuW(menu, MF_STRING | (gGraphOn ? MF_CHECKED : 0), ID_GRAPH, L"Sound graph");
                 AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
                 AppendMenuW(menu, MF_STRING, ID_QUIT, L"Quit");
                 POINT pt; GetCursorPos(&pt);
@@ -1410,6 +1571,7 @@ static LRESULT CALLBACK MessageProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 case ID_SHOTS_UP: AdjustShots(-3.f); break;
                 case ID_SHOTS_DOWN: AdjustShots(+3.f); break;
                 case ID_FLASH: ToggleFlash(); break;
+                case ID_GRAPH: ToggleGraph(); break;
                 case ID_QUIT: PostQuitMessage(0); break;
             }
             return 0;
@@ -1458,6 +1620,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     gDuration = Clampf(IniFloat(L"settings", L"indicator_duration_s", kDefaultDuration), 0.5f, 3.f);
     gDebug = IniInt(L"settings", L"debug", 0) != 0;   // debug=1 shows each detected shot in the bar
     gFlashOn = IniInt(L"settings", L"flash_enabled", 1) != 0;
+    gGraphOn = IniInt(L"settings", L"graph_enabled", 1) != 0;
     gFlashMin = Clampf(IniFloat(L"settings", L"flash_min_intensity", kDefaultFlashMin), 0.f, 1.f);
     EnsureColorSection();   // writes the documented [colors] section on first run
     LoadTheme();
@@ -1507,6 +1670,12 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     gOv[T_FLASH].type = T_FLASH; gOv[T_FLASH].name = L"flash";
     gOv[T_FLASH].w = barW + 2 * gGlowPx; gOv[T_FLASH].h = barH + 2 * gGlowPx; gOv[T_FLASH].scale = sb;
 
+    // sound graph: bottom center of the screen
+    gOv[T_GRAPH].type = T_GRAPH; gOv[T_GRAPH].name = L"graph";
+    gOv[T_GRAPH].w = (int)(kGraphW * sb + 0.5f); gOv[T_GRAPH].h = (int)(kGraphH * sb + 0.5f); gOv[T_GRAPH].scale = sb;
+    gOv[T_GRAPH].x = (sw - gOv[T_GRAPH].w) / 2;
+    gOv[T_GRAPH].y = sh - gOv[T_GRAPH].h - (int)(36 * s + 0.5f);
+
     gOv[T_PANEL].type = T_PANEL; gOv[T_PANEL].name = L"panel";
     gOv[T_PANEL].w = (int)(kPanelW * sb + 0.5f); gOv[T_PANEL].h = (int)(kPanelH * sb + 0.5f); gOv[T_PANEL].scale = sb;
 
@@ -1554,7 +1723,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
 
     // first draw (the panel stays hidden until the gear is clicked)
     Tick();
-    for (auto& o : gOv) if (o.type != T_PANEL) ShowWindow(o.hwnd, SW_SHOWNOACTIVATE);
+    for (auto& o : gOv) if (o.type != T_PANEL && (o.type != T_GRAPH || gGraphOn)) ShowWindow(o.hwnd, SW_SHOWNOACTIVATE);
 
     HANDLE thread = CreateThread(nullptr, 0, AudioThread, nullptr, 0, nullptr);
     SetTimer(gMsgWnd, 1, 16, nullptr);
