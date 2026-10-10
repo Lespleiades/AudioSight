@@ -54,7 +54,7 @@ This tool **only presents audio information from your device audio output**. Sti
 
 ## Windows Release
 
-[AudioSight.exe](https://github.com/Lespleiades/AudioSight/releases/tag/executable)
+[AudioSight.exe](https://github.com/Lespleiades/AudioSight/releases)
 
 ## Building
 
