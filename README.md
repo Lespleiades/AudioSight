@@ -20,7 +20,7 @@ It was built as an accessibility aid for players who are deaf or hard of hearing
 
 ## Important
 
-Select **Borderless Windowed** in your options game menu.
+Select **Borderless Windowed** in your video game settings menu.
 
 ## Hotkeys
 
