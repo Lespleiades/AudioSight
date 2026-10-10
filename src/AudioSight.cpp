@@ -1,5 +1,11 @@
 // =====================================================================
-//  AudioSight: Directional Audio Overlay
+//  AudioSight
+//
+//  A overlay that shows, on screen, from which side the
+//  sounds of a game are coming (left / right / center).
+//
+//  - Captures the system audio output with WASAPI loopback
+//  - Draws everything with GDI+ in click-through "layered" windows
 //
 //  Hotkeys (global, they work while the game has focus):
 //    F7  : open / close the settings panel
@@ -7,6 +13,7 @@
 //    F9  : volume bars more sensitive      F10 : less sensitive
 //    F11 : shot detection more sensitive   F12 : less sensitive
 //  Notification area icon: click for a menu (including "Quit").
+//
 //
 //  Build (MinGW-w64):
 //    g++ -O2 -s -mwindows -static -static-libgcc -static-libstdc++
@@ -1431,8 +1438,8 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     // single instance
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\DirectionalAudioOverlay");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(nullptr, L"Directional Audio Overlay is already running (see the notification area icon).",
-                    L"Directional Audio Overlay", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(nullptr, L"AudioSight is already running (see the notification area icon).",
+                    L"AudioSight", MB_OK | MB_ICONINFORMATION);
         return 0;
     }
     SetProcessDPIAware();
@@ -1525,14 +1532,14 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
 
     for (auto& o : gOv) {
         if (!CreateOverlay(&o, hi)) {
-            MessageBoxW(nullptr, L"Could not create the overlay window.", L"Directional Audio Overlay",
+            MessageBoxW(nullptr, L"Could not create the overlay window.", L"AudioSight",
                         MB_OK | MB_ICONERROR);
             return 1;
         }
     }
 
     // --- hidden message window: timer, hotkeys, notification area icon
-    gMsgWnd = CreateWindowExW(0, L"DAO_Message", L"Directional Audio Overlay", WS_POPUP, 0, 0, 0, 0,
+    gMsgWnd = CreateWindowExW(0, L"DAO_Message", L"AudioSight", WS_POPUP, 0, 0, 0, 0,
                               nullptr, nullptr, hi, nullptr);
     RegisterHotkeys(gMsgWnd);
     gNid.cbSize = sizeof(gNid);
@@ -1542,7 +1549,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
     gNid.uCallbackMessage = WM_TRAY;
     gNid.hIcon = CreateTrayIcon();
     if (!gNid.hIcon) gNid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-    wcscpy(gNid.szTip, L"Directional Audio Overlay (click: menu)");
+    wcscpy(gNid.szTip, L"AudioSight");
     Shell_NotifyIconW(NIM_ADD, &gNid);
 
     // first draw (the panel stays hidden until the gear is clicked)
