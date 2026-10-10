@@ -48,7 +48,7 @@ The program does **not** read or modify game memory, does not inject anything an
 - Windows 10 / 11, 64-bit.
 - Direction accuracy depends on how the game mixes its audio (stereo headphone output works best).
 
-### Cautions
+## Cautions
 
 This tool **only presents audio information from your device audio output**. Still, rules differ between games, servers and tournaments: **check that overlays and accessibility tools are allowed where you play**.
 
