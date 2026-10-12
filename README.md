@@ -1,14 +1,11 @@
 
 # AudioSight: Directional Audio Overlay
 
-<img width="800" height="450" alt="AudioSight" src="https://github.com/user-attachments/assets/29162396-5154-4411-a4d6-8089892aade8" />
+<img width="1920" height="1080" alt="AudioSight" src="https://github.com/user-attachments/assets/43c1801a-dbd3-44fa-9373-9c025a5ee0d2" />
 
 
 A overlay that shows where sounds come from in a shooter game.
 It was built as an accessibility aid for players who are deaf or hard of hearing.
-
-<!-- Add a screenshot here, e.g. docs/screenshot.png -->
-<!-- ![Screenshot](docs/screenshot.png) -->
 
 ## Quick start
 
