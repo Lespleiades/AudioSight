@@ -1,0 +1,2 @@
+// Embeds the manifest (resource type 24 = RT_MANIFEST, id 1) into AudioSight.exe
+1 24 "AudioSight.manifest"
