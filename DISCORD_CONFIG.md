@@ -8,6 +8,12 @@ This takes about 5 minutes and only has to be done once.
 
 ---
 
+## Important: 
+
+For sending messages to Discord to work correctly, AudioSight.exe must be running in Administrator mode.
+
+---
+
 ## What you need
 
 - A Discord account with the **Manage Server** permission on the server where the chat is (this is always the case on a server you created).
