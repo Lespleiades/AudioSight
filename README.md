@@ -20,7 +20,8 @@ It was built as an accessibility aid for players who are deaf or hard of hearing
 
 ## Important
 
-Select **Borderless Windowed** in your video game settings menu.
+- Select **Borderless Windowed** in your video game settings menu.
+- For sending messages to Discord to work correctly, AudioSight.exe must be running in Administrator mode.
 
 ## Hotkeys
 
