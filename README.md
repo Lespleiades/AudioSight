@@ -1,5 +1,5 @@
 
-# AudioSight: Directional Audio Overlay
+# AudioSight: Overlay for Deaf players
 
 <img width="1920" height="1080" alt="AudioSight" src="https://github.com/user-attachments/assets/43c1801a-dbd3-44fa-9373-9c025a5ee0d2" />
 
