@@ -25,7 +25,7 @@ It was built as an accessibility aid for players who are deaf or hard of hearing
 - Right and left sound volume display. 
 - Last shot position indication slider. 
 - Real-time audio waveform display. 
-- Display of a Discord room in real time. 
+- Display of a Discord room in real time, see [DISCORD_CONFIG.md](https://github.com/Lespleiades/AudioSight/blob/main/DISCORD_CONFIG.md). 
 - Keypad shortcuts to quickly send messages in the Discord room. 
 - Easy message text and Discord setup in AudioSight.ini. 
 - Enabling and disabling features displayed in the AudioSight menu.
