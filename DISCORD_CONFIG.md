@@ -121,7 +121,7 @@ The chat window shows a message when something is wrong:
 ## Good to know
 
 - **What is displayed:** the latest messages of the channel, including the ones written by other bots. Text, mentions (`@name`), custom emojis (`:name:`) and bot embeds are shown. Images and files are shown as `[attachment]`.
-- **Replying:** the chat window only displays messages. To answer with one key press, use the [Quick phrases](QUICK-PHRASES.md). For anything else, go back to Discord.
+- **Replying:** the chat window only displays messages. To answer with one key press, use the Quick phrases. For anything else, go back to Discord.
 - **One channel at a time:** to follow another channel, change `channel_id`.
 - **No direct messages:** a bot can only read channels of servers it has been invited to.
 - **Speech to text:** the overlay shows text only. If you want voice conversations transcribed, add a transcription bot to your server (follow that bot's own documentation) and set `channel_id` to the text channel where it writes its transcripts.
