@@ -13,6 +13,7 @@
 //    F8  : move mode ON/OFF (drag the elements with the mouse)
 //    F9  : volume bars more sensitive      F10 : less sensitive
 //    F11 : shot detection more sensitive   F12 : less sensitive
+//  Notification area icon: click for a menu (including "Quit").
 //
 //  Build (MinGW-w64):
 //    g++ -O2 -s -mwindows -static -static-libgcc -static-libstdc++
@@ -167,6 +168,11 @@ static void SaveSettings() {
 // ------------------------------------------------------------ colors (theme)
 // EVERY color of the interface is defined in this single list:
 //   X(field, "ini key", default 0xAARRGGBB, "description")
+// * To change a default color: edit its value below and rebuild.
+// * Users can override any color WITHOUT rebuilding, in the [colors] section
+//   of AudioSight.ini (created on first run). Changes apply live as soon
+//   as the file is saved.
+// * To add a color: add one line here, then use gTheme.<field> where needed.
 #define COLOR_LIST(X) \
 	X(leftColor,          L"left_color",            0xFFA019E1, "Left side accent: left volume bars, letter L, left end of the marker, tray icon") \
     X(rightColor,         L"right_color",           0xFF28E119, "Right side accent: right volume bars, letter R, right end of the marker, tray icon") \
@@ -231,6 +237,7 @@ static void SaveSettings() {
     X(chatAuthor,         L"chat_author",           0xFFBE5CF5, "Names of the people who write in the Discord chat") \
     X(chatHint,           L"chat_hint",             0xFF969EAF, "Help and status texts of the Discord chat window") \
     X(chatError,          L"chat_error",            0xFFFF7B7B, "Connection error messages of the Discord chat window") \
+    X(chatPlayer,         L"chat_player",           0xFFFFD93D, "Player name [in brackets] in front of the quick phrases sent from AudioSight (shown in bold)") \
     X(quickBackground,    L"quick_background",      0xB00C0E14, "Background of the quick phrases window (AA = how see-through it is)") \
     X(quickBorder,        L"quick_border",          0x28FFFFFF, "Outline of the quick phrases window") \
     X(quickText,          L"quick_text",            0xFF28E119, "The phrases of the quick phrases window") \
@@ -1186,6 +1193,8 @@ static void LoadQuick() {
     std::wstring v;
     gPlayerName = IniTextGet(txt, L"quick", L"player_name", &v) ? v : L"";
     if (gPlayerName.size() > 32) gPlayerName.resize(32);
+    gPlayerName.erase(std::remove_if(gPlayerName.begin(), gPlayerName.end(),
+                                     [](wchar_t c) { return c == L'[' || c == L']'; }), gPlayerName.end());   // [ ] frame the name
     for (int i = 0; i < 10; i++) {
         wchar_t kn[16], tn[16];
         _snwprintf(kn, 16, L"key%d", i);
@@ -1221,7 +1230,8 @@ static void EnsureQuickSection() {
           ";          receive it). The numpad digits need NumLock to be on.\r\n"
           "; textN = the phrase. Leave it empty to remove the phrase from the list.\r\n"
           ";          Accents work if the file is saved as UTF-8 (the default of Notepad).\r\n"
-          "; player_name = written before each phrase (\"Name: phrase\"). Leave empty for nothing.\r\n"
+          "; player_name = your name, posted in front of each phrase as \"[Name]: phrase\" (the chat shows it\r\n"
+          ";          in bold yellow, color chat_player). Leave empty for nothing.\r\n"
           "player_name=\r\n"
           "key0=NUMPAD0\r\ntext0=I cover A point\r\n"
           "key1=NUMPAD1\r\ntext1=I cover B point\r\n"
@@ -1663,7 +1673,7 @@ static void DrawChat(Overlay* o) {
         g->DrawString(L"Discord chat: waiting for messages...", -1, &fr, PointF(pad, H - pad - lineH), &sf, &b);
     }
 
-    struct Run { std::wstring t; float x; bool bold; };
+    struct Run { std::wstring t; float x; int kind; };   // kind: 0 text, 1 author (bot), 2 player name
     typedef std::vector<Run> Line;
     // word wrap: "Name text text text" with the first line starting after the name
     auto layout = [&](const ChatMsg& m) {
@@ -1672,9 +1682,19 @@ static void DrawChat(Overlay* o) {
         std::wstring au = m.author;
         float aw = tw(au, fb);
         while (au.size() > 1 && aw > textW * 0.6f) { au.pop_back(); aw = tw(au, fb); }
-        cur.push_back({au, 0.f, true});
+        cur.push_back({au, 0.f, 1});
         float x = aw + spaceW * 1.5f;
-        const std::wstring& body = m.text;
+        // a phrase sent from AudioSight starts with "[PlayerName]: ": the name gets its own color
+        std::wstring body = m.text;
+        const size_t close = body.find(L"]: ");
+        if (body.size() > 4 && body[0] == L'[' && close != std::wstring::npos && close >= 2 && close <= 40) {
+            const std::wstring tag = body.substr(0, close + 1);
+            body = body.substr(close + 3);
+            const float pw = tw(tag, fb);
+            cur.push_back({tag, x, 2});
+            cur.push_back({L":", x + pw, 0});
+            x += pw + tw(L":", fr) + spaceW;
+        }
         size_t p = 0;
         while (p < body.size()) {
             while (p < body.size() && body[p] == L' ') p++;
@@ -1685,11 +1705,11 @@ static void DrawChat(Overlay* o) {
             p = e;
             for (;;) {
                 const float ww = tw(w, fr);
-                if (x + ww <= textW) { cur.push_back({w, x, false}); x += ww + spaceW; break; }
+                if (x + ww <= textW) { cur.push_back({w, x, 0}); x += ww + spaceW; break; }
                 if (x > 0.f) { lines.push_back(cur); cur.clear(); x = 0.f; continue; }
                 size_t k = w.size();   // a word wider than the window: cut it
                 while (k > 1 && tw(w.substr(0, k), fr) > textW) k--;
-                cur.push_back({w.substr(0, k), 0.f, false});
+                cur.push_back({w.substr(0, k), 0.f, 0});
                 lines.push_back(cur);
                 cur.clear();
                 w = w.substr(k);
@@ -1718,9 +1738,9 @@ static void DrawChat(Overlay* o) {
             const float ly = y0 + (float)(li - firstLine) * lineH;
             const float fade = 0.40f + 0.60f * Clampf((ly - top) / max(1.f, H - pad - top - lineH), 0.f, 1.f);
             for (const Run& r : lines[(size_t)li]) {
-                const uint32_t c = r.bold ? gTheme.chatAuthor : gTheme.chatText;
+                const uint32_t c = r.kind == 1 ? gTheme.chatAuthor : (r.kind == 2 ? gTheme.chatPlayer : gTheme.chatText);
                 SolidBrush b(ColA(c, (int)((float)(c >> 24) * fade + 0.5f)));
-                g->DrawString(r.t.c_str(), (INT)r.t.size(), r.bold ? &fb : &fr, PointF(pad + r.x, ly), &sf, &b);
+                g->DrawString(r.t.c_str(), (INT)r.t.size(), r.kind ? &fb : &fr, PointF(pad + r.x, ly), &sf, &b);
             }
         }
         y = y0 - gap;
@@ -2124,7 +2144,7 @@ static void QuickSend(int i) {
     const double now = Now();
     if (now - gQuickLastSend < 0.6) return;   // no spam
     gQuickLastSend = now;
-    std::wstring msg = gPlayerName.empty() ? gQuick[i].text : gPlayerName + L": " + gQuick[i].text;
+    std::wstring msg = gPlayerName.empty() ? gQuick[i].text : L"[" + gPlayerName + L"]: " + gQuick[i].text;
     if (msg.size() > 1900) msg.resize(1900);
     EnterCriticalSection(&gChatCs);
     if (gOutbox.size() < 3) gOutbox.push_back(msg);
