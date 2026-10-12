@@ -20,6 +20,16 @@ It was built as an accessibility aid for players who are deaf or hard of hearing
 - Select **Borderless Windowed** in your video game settings menu.
 - For sending messages to Discord to work correctly, **AudioSight.exe must be running in Administrator mode**.
 
+## Features
+
+- Right and left sound volume display. 
+- Last shot position indication slider. 
+- Real-time audio waveform display. 
+- Display of a Discord room in real time. 
+- Keypad shortcuts to quickly send messages in the Discord room. 
+- Easy message text and Discord setup in AudioSight.ini. 
+- Enabling and disabling features displayed in the AudioSight menu.
+
 ## Hotkeys
 
 Global hotkeys, they work while the game has focus.
