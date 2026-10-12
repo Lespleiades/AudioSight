@@ -2,7 +2,7 @@
 # AudioSight: Overlay for Deaf players
 
 <img width="1920" height="1080" alt="AudioSight" src="https://github.com/user-attachments/assets/43c1801a-dbd3-44fa-9373-9c025a5ee0d2" />
-[![AudioSight](https://img.youtube.com/vi/AOsxtJFJNTY/0.jpg)](https://www.youtube.com/watch?v=AOsxtJFJNTY)
+[![AudioSight](https://img.youtube.com/vi/AOsxtJFJNTY/0.jpg)(https://www.youtube.com/watch?v=AOsxtJFJNTY)
 
 A overlay that shows where sounds come from in a shooter game.
 It was built as an accessibility aid for players who are deaf or hard of hearing.
